@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Cancel in-progress runs on the same ref — same convention as
+# codefly-dev/core. A superseded commit doesn't need to finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go
+
+
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test  ./...
+
+  nix-flake-check:
+    # Strict: every codefly plugin ships a flake.nix so it can be
+    # built reproducibly via nix in production. This step validates
+    # the flake's structure (inputs, outputs, dev shells); a broken
+    # flake means the plugin can't be installed via nix and would
+    # drop out of the production path. Build + vendorHash baking is
+    # a separate per-release job — see the flake.nix doc-comment.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: nix flake check
+        run: nix flake check --no-build
