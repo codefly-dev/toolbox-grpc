@@ -27,7 +27,7 @@
           pname = "toolbox-grpc";
           version = "0.0.1";
           src = pkgs.lib.cleanSource ./.;
-          vendorHash = pkgs.lib.fakeHash;
+          vendorHash = "sha256-zoYYmhrob6lb7dfVp3f1WdcPV3845P8eqeM8R/l7nbU=";
           # Build only the binary entrypoint, not the test packages —
           # `subPackages` keeps the nix build narrow + fast.
           subPackages = [ "cmd/toolbox-grpc" ];
