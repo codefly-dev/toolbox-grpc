@@ -1,0 +1,7 @@
+go.work
+go.work.sum
+/toolbox-grpc
+/cmd/toolbox-grpc/toolbox-grpc
+.DS_Store
+.idea/
+.vscode/
