@@ -1,4 +1,4 @@
 publisher: codefly.dev
 kind: codefly:toolbox
 name: grpc
-version: 0.0.2
+version: 0.0.3
