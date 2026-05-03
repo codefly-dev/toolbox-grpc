@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -85,7 +86,12 @@ func TestGRPC_ListServices_RequiresAddress(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, resp.Error)
-	require.Contains(t, resp.Error, "address is required")
+	// As of core@v0.1.159, registry.Base auto-validates against
+	// InputSchema BEFORE dispatch. Validator phrasing is
+	// "missing property 'address'" — accept either form.
+	require.True(t,
+		strings.Contains(resp.Error, "address") || strings.Contains(resp.Error, "required"),
+		"missing address must surface a clear hint; got %q", resp.Error)
 }
 
 func TestGRPC_DescribeService_RequiresBothFields(t *testing.T) {
