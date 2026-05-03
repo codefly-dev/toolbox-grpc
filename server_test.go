@@ -109,9 +109,19 @@ func TestGRPC_DescribeService_RequiresBothFields(t *testing.T) {
 func TestGRPC_Call_NotImplemented_DispatchesCleanly(t *testing.T) {
 	// Phase 1 stub. Confirms the dispatch path is wired so swapping
 	// the body is a one-line change later.
+	//
+	// Pass schema-valid args so registry.Base's auto-validation
+	// passes; we want the stub's "not yet implemented" error, not
+	// the validator's missing-property error.
 	srv := grpctoolbox.New("0.0.1")
+	args, _ := structpb.NewStruct(map[string]any{
+		"address": "127.0.0.1:50051",
+		"service": "x.Service",
+		"method":  "M",
+	})
 	resp, err := srv.CallTool(context.Background(), &toolboxv0.CallToolRequest{
-		Name: "grpc.call",
+		Name:      "grpc.call",
+		Arguments: args,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, resp.Error)
