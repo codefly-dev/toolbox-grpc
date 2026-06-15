@@ -2,6 +2,8 @@ module github.com/codefly-dev/toolbox-grpc
 
 go 1.25.0
 
+toolchain go1.26.4
+
 require (
 	github.com/codefly-dev/core v0.1.159
 	github.com/stretchr/testify v1.11.1
