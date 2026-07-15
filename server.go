@@ -2,22 +2,25 @@ package grpc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
 	"strings"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	reflectpb "google.golang.org/grpc/reflection/grpc_reflection_v1"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/descriptorpb"
-	"google.golang.org/protobuf/types/known/structpb"
-
 	toolboxv0 "github.com/codefly-dev/core/generated/go/codefly/services/toolbox/v0"
 	"github.com/codefly-dev/core/toolbox/registry"
 	"github.com/codefly-dev/core/toolbox/respond"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	reflectpb "google.golang.org/grpc/reflection/grpc_reflection_v1"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // DefaultDialTimeout caps any single dial+reflect call. gRPC dials
@@ -35,27 +38,19 @@ const DefaultDialTimeout = 10 * time.Second
 // state for an attacker (or a buggy agent) to leak across calls.
 type Server struct {
 	*registry.Base
-
-	version string
 }
 
 // New returns a Server.
 func New(version string) *Server {
-	s := &Server{version: version}
-	s.Base = registry.NewBase(s)
-	return s
-}
-
-// --- Identity ----------------------------------------------------
-
-func (s *Server) Identity(_ context.Context, _ *toolboxv0.IdentityRequest) (*toolboxv0.IdentityResponse, error) {
-	return &toolboxv0.IdentityResponse{
+	s := &Server{}
+	s.Base = registry.NewBase(registry.Descriptor{
 		Name:           "grpc",
-		Version:        s.version,
+		Version:        version,
 		Description:    "gRPC reflection-based service/method introspection. Canonical owner of the `grpcurl` binary.",
 		CanonicalFor:   []string{"grpcurl"},
 		SandboxSummary: "reads: deny; writes: deny; network: allowed to the dial target (one short-lived connection per call)",
-	}, nil
+	}, s.Tools()...)
+	return s
 }
 
 // --- Tools -------------------------------------------------------
@@ -88,13 +83,13 @@ func (s *Server) Tools() []*registry.ToolDefinition {
 				},
 				"required": []any{"address"},
 			}),
-			Tags:        []string{"grpc", "read-only", "network"},
+			Tags:        []string{"read-only", "network"},
 			Idempotency: "idempotent",
 			ErrorModes:  "Returns 'dial X: ...' when the server is unreachable, 'open reflection stream: ...' when reflection isn't registered, or 'reflection: ...' when the server reports an error.",
 			Examples: []*toolboxv0.ToolExample{
 				{
 					Description:     "Discover what services a local gRPC plugin exposes.",
-					Arguments:       mustGrpcStruct(map[string]any{"address": "127.0.0.1:54321"}),
+					Arguments:       respond.MustStruct(map[string]any{"address": "127.0.0.1:54321"}),
 					ExpectedOutcome: "{ services: ['codefly.services.toolbox.v0.Toolbox', 'grpc.health.v1.Health', ...] }",
 				},
 			},
@@ -118,13 +113,13 @@ func (s *Server) Tools() []*registry.ToolDefinition {
 				},
 				"required": []any{"address", "service"},
 			}),
-			Tags:        []string{"grpc", "read-only", "network"},
+			Tags:        []string{"read-only", "network"},
 			Idempotency: "idempotent",
 			ErrorModes:  "Returns 'service X not found' when the name doesn't exist, 'reflection: ...' on protocol errors.",
 			Examples: []*toolboxv0.ToolExample{
 				{
 					Description:     "Inspect the Toolbox service's methods.",
-					Arguments:       mustGrpcStruct(map[string]any{"address": "127.0.0.1:54321", "service": "codefly.services.toolbox.v0.Toolbox"}),
+					Arguments:       respond.MustStruct(map[string]any{"address": "127.0.0.1:54321", "service": "codefly.services.toolbox.v0.Toolbox"}),
 					ExpectedOutcome: "{ service, methods: [{ name: 'Identity', input_type, output_type, ... }, ...] }",
 				},
 			},
@@ -152,13 +147,13 @@ func (s *Server) Tools() []*registry.ToolDefinition {
 				},
 				"required": []any{"address", "service", "method"},
 			}),
-			Tags:        []string{"grpc", "read-only", "network"},
+			Tags:        []string{"read-only", "network"},
 			Idempotency: "idempotent",
 			ErrorModes:  "Returns 'method X not found on service Y' when the name doesn't exist, 'reflection: ...' on protocol errors.",
 			Examples: []*toolboxv0.ToolExample{
 				{
 					Description:     "Look up the Identity RPC's signature.",
-					Arguments:       mustGrpcStruct(map[string]any{"address": "127.0.0.1:54321", "service": "codefly.services.toolbox.v0.Toolbox", "method": "Identity"}),
+					Arguments:       respond.MustStruct(map[string]any{"address": "127.0.0.1:54321", "service": "codefly.services.toolbox.v0.Toolbox", "method": "Identity"}),
 					ExpectedOutcome: "{ name: 'Identity', input_type: '...IdentityRequest', output_type: '...IdentityResponse', client_streaming: false, server_streaming: false }",
 				},
 			},
@@ -166,12 +161,11 @@ func (s *Server) Tools() []*registry.ToolDefinition {
 		},
 		{
 			Name:               "grpc.call",
-			SummaryDescription: "Invoke a unary RPC with JSON args. Phase 2 stub — currently returns 'not implemented'.",
-			LongDescription: "Will invoke a unary RPC with JSON-shaped arguments converted to the method's " +
-				"input message via dynamicpb. Phase 1 of the grpc toolbox doesn't implement this — " +
-				"introspection (list_services / describe_service / describe_method) is sufficient for " +
-				"discovery flows. Calling grpc.call today returns an actionable error so the agent can " +
-				"fall back; the dispatch case is in place so a later commit only swaps the body.",
+			SummaryDescription: "Invoke a unary RPC with a JSON request using server reflection. Potentially destructive.",
+			LongDescription: "Resolves the service and method descriptors through gRPC reflection, converts the " +
+				"JSON-shaped request to the exact protobuf input type, invokes the unary RPC, and returns the " +
+				"protobuf response as JSON. Streaming methods are rejected. This tool can call mutating RPCs, " +
+				"so callers must treat every invocation as potentially destructive.",
 			InputSchema: respond.Schema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -186,34 +180,20 @@ func (s *Server) Tools() []*registry.ToolDefinition {
 				},
 				"required": []any{"address", "service", "method"},
 			}),
-			Tags:        []string{"grpc", "network", "stub"},
+			Tags:        []string{"network", "destructive"},
+			Destructive: true,
 			Idempotency: "unknown",
-			ErrorModes:  "Always returns 'grpc.call not yet implemented; introspection (list_services / describe_service / describe_method) is usable today' until the body lands.",
+			ErrorModes:  "Returns a reflection error for unknown services/methods, rejects streaming methods, rejects JSON fields not present in the input message, and surfaces the target RPC status on invocation failure.",
 			Examples: []*toolboxv0.ToolExample{
 				{
-					Description:     "Phase 2 will invoke arbitrary RPCs.",
-					Arguments:       mustGrpcStruct(map[string]any{"address": "127.0.0.1:54321", "service": "codefly.services.toolbox.v0.Toolbox", "method": "Identity"}),
-					ExpectedOutcome: "Currently returns the not-implemented error.",
+					Description:     "Read a Codefly toolbox identity.",
+					Arguments:       respond.MustStruct(map[string]any{"address": "127.0.0.1:54321", "service": "codefly.services.toolbox.v0.Toolbox", "method": "Identity", "request": map[string]any{}}),
+					ExpectedOutcome: "{ response: { name, version, description, ... } }",
 				},
 			},
-			Handler: s.callStub,
+			Handler: s.callUnary,
 		},
 	}
-}
-
-func mustGrpcStruct(m map[string]any) *structpb.Struct {
-	s, err := structpb.NewStruct(m)
-	if err != nil {
-		panic(fmt.Sprintf("grpc toolbox: cannot encode example args: %v", err))
-	}
-	return s
-}
-
-// callStub is the Phase 1 stub for grpc.call. Wired through Handler
-// so a later iteration just swaps the body without touching the
-// dispatch surface.
-func (s *Server) callStub(_ context.Context, _ *toolboxv0.CallToolRequest) *toolboxv0.CallToolResponse {
-	return respond.Error("grpc.call not yet implemented; introspection (list_services / describe_service / describe_method) is usable today")
 }
 
 // --- Tool implementations ----------------------------------------
@@ -313,6 +293,65 @@ func (s *Server) describeMethod(ctx context.Context, req *toolboxv0.CallToolRequ
 	})
 }
 
+func (s *Server) callUnary(ctx context.Context, req *toolboxv0.CallToolRequest) *toolboxv0.CallToolResponse {
+	args := respond.Args(req)
+	address, _ := args["address"].(string)
+	service, _ := args["service"].(string)
+	method, _ := args["method"].(string)
+	if address == "" || service == "" || method == "" {
+		return respond.Error("grpc.call: address, service, and method are required")
+	}
+	request, _ := args["request"].(map[string]any)
+	if request == nil {
+		request = map[string]any{}
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, timeoutFromArgs(args))
+	defer cancel()
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return respond.Error("grpc.call: dial %s: %v", address, err)
+	}
+	defer conn.Close()
+
+	stream, err := reflectpb.NewServerReflectionClient(conn).ServerReflectionInfo(callCtx)
+	if err != nil {
+		return respond.Error("grpc.call: open reflection stream: %v", err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+
+	descriptor, err := reflectMethodDescriptor(stream, service, method)
+	if err != nil {
+		return respond.Error("grpc.call: %v", err)
+	}
+	if descriptor.IsStreamingClient() || descriptor.IsStreamingServer() {
+		return respond.Error("grpc.call: %s/%s is streaming; only unary RPCs are supported", service, method)
+	}
+
+	requestJSON, err := json.Marshal(request)
+	if err != nil {
+		return respond.Error("grpc.call: encode request JSON: %v", err)
+	}
+	input := dynamicpb.NewMessage(descriptor.Input())
+	if err = (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(requestJSON, input); err != nil {
+		return respond.Error("grpc.call: request does not match %s: %v", descriptor.Input().FullName(), err)
+	}
+	output := dynamicpb.NewMessage(descriptor.Output())
+	fullMethod := fmt.Sprintf("/%s/%s", service, method)
+	if err = conn.Invoke(callCtx, fullMethod, input, output); err != nil {
+		return respond.Error("grpc.call: invoke %s: %v", fullMethod, err)
+	}
+	responseJSON, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(output)
+	if err != nil {
+		return respond.Error("grpc.call: encode %s response: %v", descriptor.Output().FullName(), err)
+	}
+	var response any
+	if err = json.Unmarshal(responseJSON, &response); err != nil {
+		return respond.Error("grpc.call: decode response JSON: %v", err)
+	}
+	return respond.Struct(map[string]any{"response": response})
+}
+
 // --- Reflection plumbing -----------------------------------------
 
 // methodInfo is the toolbox's own (lightweight) view of a method —
@@ -392,33 +431,15 @@ func reflectListServices(stream reflectpb.ServerReflection_ServerReflectionInfoC
 // FileContainingSymbol is the standard "give me the file that
 // defines X" reflection query — same one grpcurl uses internally.
 func reflectDescribeService(stream reflectpb.ServerReflection_ServerReflectionInfoClient, service string) ([]methodInfo, error) {
-	if err := stream.Send(&reflectpb.ServerReflectionRequest{
-		MessageRequest: &reflectpb.ServerReflectionRequest_FileContainingSymbol{
-			FileContainingSymbol: service,
-		},
-	}); err != nil {
-		return nil, fmt.Errorf("send FileContainingSymbol: %w", err)
-	}
-	resp, err := stream.Recv()
+	files, err := reflectFilesForSymbol(stream, service)
 	if err != nil {
-		return nil, fmt.Errorf("recv FileContainingSymbol: %w", err)
-	}
-	if errResp := resp.GetErrorResponse(); errResp != nil {
-		return nil, fmt.Errorf("reflection: %s (code %d)", errResp.GetErrorMessage(), errResp.GetErrorCode())
-	}
-	fd := resp.GetFileDescriptorResponse()
-	if fd == nil {
-		return nil, fmt.Errorf("reflection: FileDescriptorResponse missing")
+		return nil, err
 	}
 
 	// The reflection server may return the requested file plus its
 	// transitive dependencies. Find the one that actually defines
 	// the requested service.
-	for _, raw := range fd.GetFileDescriptorProto() {
-		var fdp descriptorpb.FileDescriptorProto
-		if err := proto.Unmarshal(raw, &fdp); err != nil {
-			return nil, fmt.Errorf("unmarshal FileDescriptorProto: %w", err)
-		}
+	for _, fdp := range files {
 		// service is fully-qualified ("pkg.Service"); fdp.Package is
 		// "pkg" and Service.Name is "Service".
 		shortName := service
@@ -448,6 +469,61 @@ func reflectDescribeService(stream reflectpb.ServerReflection_ServerReflectionIn
 		}
 	}
 	return nil, fmt.Errorf("service %q not found in any returned FileDescriptorProto", service)
+}
+
+func reflectFilesForSymbol(stream reflectpb.ServerReflection_ServerReflectionInfoClient, symbol string) ([]*descriptorpb.FileDescriptorProto, error) {
+	if err := stream.Send(&reflectpb.ServerReflectionRequest{
+		MessageRequest: &reflectpb.ServerReflectionRequest_FileContainingSymbol{
+			FileContainingSymbol: symbol,
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("send FileContainingSymbol: %w", err)
+	}
+	resp, err := stream.Recv()
+	if err != nil {
+		return nil, fmt.Errorf("recv FileContainingSymbol: %w", err)
+	}
+	if errResp := resp.GetErrorResponse(); errResp != nil {
+		return nil, fmt.Errorf("reflection: %s (code %d)", errResp.GetErrorMessage(), errResp.GetErrorCode())
+	}
+	fd := resp.GetFileDescriptorResponse()
+	if fd == nil {
+		return nil, fmt.Errorf("reflection: FileDescriptorResponse missing")
+	}
+
+	files := make([]*descriptorpb.FileDescriptorProto, 0, len(fd.GetFileDescriptorProto()))
+	for _, raw := range fd.GetFileDescriptorProto() {
+		var fdp descriptorpb.FileDescriptorProto
+		if err := proto.Unmarshal(raw, &fdp); err != nil {
+			return nil, fmt.Errorf("unmarshal FileDescriptorProto: %w", err)
+		}
+		files = append(files, &fdp)
+	}
+	return files, nil
+}
+
+func reflectMethodDescriptor(stream reflectpb.ServerReflection_ServerReflectionInfoClient, service, method string) (protoreflect.MethodDescriptor, error) {
+	files, err := reflectFilesForSymbol(stream, service)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := protodesc.NewFiles(&descriptorpb.FileDescriptorSet{File: files})
+	if err != nil {
+		return nil, fmt.Errorf("build descriptor registry: %w", err)
+	}
+	descriptor, err := registry.FindDescriptorByName(protoreflect.FullName(service))
+	if err != nil {
+		return nil, fmt.Errorf("service %q not found: %w", service, err)
+	}
+	serviceDescriptor, ok := descriptor.(protoreflect.ServiceDescriptor)
+	if !ok {
+		return nil, fmt.Errorf("symbol %q is not a service", service)
+	}
+	methodDescriptor := serviceDescriptor.Methods().ByName(protoreflect.Name(method))
+	if methodDescriptor == nil {
+		return nil, fmt.Errorf("method %q not found on service %q", method, service)
+	}
+	return methodDescriptor, nil
 }
 
 // timeoutFromArgs reads the timeout_ms argument with the toolbox's

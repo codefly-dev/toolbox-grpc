@@ -1,20 +1,19 @@
 name: grpc
-version: 0.0.1
+version: 0.0.9
 description: |
   gRPC reflection-based service/method introspection as typed RPCs.
   Canonical owner of the `grpcurl` binary — the bash toolbox refuses
   every `grpcurl` invocation and routes here.
 
-  Phase 1: list_services, describe_service, describe_method (all
-  read-only over gRPC reflection). grpc.call is wired through the
-  dispatch but currently a stub; introspection is the productive
-  surface today.
+  list_services, describe_service, and describe_method are read-only
+  reflection operations. grpc.call resolves protobuf descriptors at
+  runtime and invokes unary RPCs; it is marked potentially destructive.
 
 agent:
   kind: codefly:toolbox
   name: grpc
   publisher: codefly.dev
-  version: 0.0.1
+  version: 0.0.9
 
 sandbox:
   read_paths: []

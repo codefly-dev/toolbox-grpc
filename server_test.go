@@ -20,17 +20,21 @@ import (
 // port with the toolbox v0 Toolbox service + reflection registered.
 // Returns the address the toolbox should dial. The server is torn
 // down via t.Cleanup so tests don't leak goroutines or sockets.
-//
-// We register a no-op UnimplementedToolboxServer (the actual RPCs
-// would error if called) — these tests only exercise reflection,
-// which doesn't invoke the methods.
+type reflectionTestServer struct {
+	toolboxv0.UnimplementedToolboxServer
+}
+
+func (reflectionTestServer) Identity(context.Context, *toolboxv0.IdentityRequest) (*toolboxv0.IdentityResponse, error) {
+	return &toolboxv0.IdentityResponse{Name: "reflection-test", Version: "1.0.0"}, nil
+}
+
 func startReflectionServer(t *testing.T) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	srv := grpc.NewServer()
-	toolboxv0.RegisterToolboxServer(srv, &toolboxv0.UnimplementedToolboxServer{})
+	toolboxv0.RegisterToolboxServer(srv, reflectionTestServer{})
 	reflection.Register(srv)
 
 	go func() { _ = srv.Serve(lis) }()
@@ -68,6 +72,11 @@ func TestGRPC_ListTools_Stable(t *testing.T) {
 		"grpc.describe_method",
 		"grpc.call",
 	}, names, "if the surface changes, pin it here")
+	for _, tool := range resp.Tools {
+		if tool.Name == "grpc.call" {
+			require.True(t, tool.Destructive, "arbitrary RPC invocation must require destructive-tool policy")
+		}
+	}
 }
 
 func TestGRPC_UnknownTool_ActionableError(t *testing.T) {
@@ -106,26 +115,40 @@ func TestGRPC_DescribeService_RequiresBothFields(t *testing.T) {
 	require.Contains(t, resp.Error, "service")
 }
 
-func TestGRPC_Call_NotImplemented_DispatchesCleanly(t *testing.T) {
-	// Phase 1 stub. Confirms the dispatch path is wired so swapping
-	// the body is a one-line change later.
-	//
-	// Pass schema-valid args so registry.Base's auto-validation
-	// passes; we want the stub's "not yet implemented" error, not
-	// the validator's missing-property error.
+func TestGRPC_CallUnary_AgainstRealServer(t *testing.T) {
+	addr := startReflectionServer(t)
 	srv := grpctoolbox.New("0.0.1")
 	args, _ := structpb.NewStruct(map[string]any{
-		"address": "127.0.0.1:50051",
-		"service": "x.Service",
-		"method":  "M",
+		"address": addr,
+		"service": "codefly.services.toolbox.v0.Toolbox",
+		"method":  "Identity",
+		"request": map[string]any{},
 	})
 	resp, err := srv.CallTool(context.Background(), &toolboxv0.CallToolRequest{
 		Name:      "grpc.call",
 		Arguments: args,
 	})
 	require.NoError(t, err)
-	require.NotEmpty(t, resp.Error)
-	require.Contains(t, resp.Error, "not yet implemented")
+	require.Empty(t, resp.Error, "dynamic unary call must succeed: %s", resp.Error)
+	out := resp.Content[0].GetStructured().AsMap()
+	response, ok := out["response"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "reflection-test", response["name"])
+	require.Equal(t, "1.0.0", response["version"])
+}
+
+func TestGRPC_CallUnary_RejectsUnknownRequestFields(t *testing.T) {
+	addr := startReflectionServer(t)
+	srv := grpctoolbox.New("0.0.1")
+	args, _ := structpb.NewStruct(map[string]any{
+		"address": addr,
+		"service": "codefly.services.toolbox.v0.Toolbox",
+		"method":  "Identity",
+		"request": map[string]any{"not_a_field": true},
+	})
+	resp, err := srv.CallTool(context.Background(), &toolboxv0.CallToolRequest{Name: "grpc.call", Arguments: args})
+	require.NoError(t, err)
+	require.Contains(t, resp.Error, "not_a_field")
 }
 
 // --- Live-server reflection tests --------------------------------

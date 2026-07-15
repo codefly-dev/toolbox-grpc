@@ -9,22 +9,11 @@
 package main
 
 import (
-	"os"
-
 	"github.com/codefly-dev/core/agents"
+	coretoolbox "github.com/codefly-dev/core/toolbox"
 	grpctoolbox "github.com/codefly-dev/toolbox-grpc"
 )
 
 func main() {
-	version := envOrDefault("CODEFLY_TOOLBOX_VERSION", "0.0.0-dev")
-	agents.Serve(agents.PluginRegistration{
-		Toolbox: grpctoolbox.New(version),
-	})
-}
-
-func envOrDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
+	agents.ServeToolbox(grpctoolbox.New(coretoolbox.Version()))
 }

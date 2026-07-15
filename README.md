@@ -5,7 +5,7 @@ Canonical owner of the `grpcurl` binary — the
 `codefly-dev/toolbox-bash` plugin refuses every `grpcurl`
 invocation and routes callers here.
 
-## Tools (read-only)
+## Tools
 
 - `grpc.list_services(address, timeout_ms?)` — opens a short-lived
   reflection stream, returns service names alphabetically.
@@ -14,8 +14,10 @@ invocation and routes callers here.
   client/server streaming flags.
 - `grpc.describe_method(address, service, method, timeout_ms?)` —
   same shape, narrowed to one method.
-- `grpc.call(...)` — Phase 2 stub, returns "not yet implemented."
-  The dispatch is in place so a later iteration only swaps the body.
+- `grpc.call(address, service, method, request?, timeout_ms?)` — resolves
+  descriptors through reflection, invokes a unary RPC, and returns
+  `{response: ...}`. Streaming methods are rejected. This tool is marked
+  destructive because an arbitrary RPC may mutate state.
 
 ## Connection lifecycle
 

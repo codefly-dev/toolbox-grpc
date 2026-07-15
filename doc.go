@@ -11,16 +11,14 @@
 // over a gRPC connection. No external binary needed, no parsing of
 // grpcurl's text output, structured results all the way through.
 //
-// Phase 1 ships introspection only — the safe surface:
+// The surface is:
 //   - grpc.list_services    — every service exposed by the target
 //   - grpc.describe_service — methods + their request/response types
 //   - grpc.describe_method  — full type descriptor for one method
+//   - grpc.call             — dynamic unary invocation with JSON input/output
 //
-// Phase 2 will add `grpc.call` (unary RPC invocation with JSON-shaped
-// args + structured response). Calling requires JSON↔proto dynamic
-// marshaling via protoreflect/dynamicpb — non-trivial but standard
-// once we accept the dependency surface. Held back from Phase 1 so
-// the introspection contract lands first and stabilizes.
+// grpc.call is marked destructive because reflection cannot determine whether
+// an arbitrary application RPC mutates state. Streaming RPCs are rejected.
 //
 // Permissions: this toolbox declares `canonical_for: [grpcurl]`.
 // Sandbox: deny most reads/writes, network ALLOWED to the target
