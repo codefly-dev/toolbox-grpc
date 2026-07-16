@@ -1,5 +1,5 @@
 name: grpc
-version: 0.0.9
+version: 0.0.10
 description: |
   gRPC reflection-based service/method introspection as typed RPCs.
   Canonical owner of the `grpcurl` binary — the bash toolbox refuses
@@ -13,7 +13,7 @@ agent:
   kind: codefly:toolbox
   name: grpc
   publisher: codefly.dev
-  version: 0.0.9
+  version: 0.0.10
 
 sandbox:
   read_paths: []
@@ -21,10 +21,24 @@ sandbox:
   # Network: outbound TCP to the dial target. Each call opens a
   # short-lived connection and tears it down. Constraining to
   # specific hosts is the host's job (OS sandbox).
-  network: allow
+  network: open
   unix_sockets: []
 
 canonical_for:
   - grpcurl
+
+permissions:
+  required:
+    - action: grpc.list_services
+      reason: Discover services exposed by a reflection-enabled endpoint.
+    - action: grpc.describe_service
+      reason: Read one reflected service descriptor.
+    - action: grpc.describe_method
+      reason: Read one reflected method descriptor.
+  optional:
+    - action: grpc.call
+      reason: Invoke an explicitly selected unary RPC when host policy permits it.
+  risk_levels:
+    grpc.call: high
 
 spec: {}
