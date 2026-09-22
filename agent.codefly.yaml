@@ -6,4 +6,4 @@ release:
   owner: cli
 source:
   directory: cmd/toolbox-grpc
-  agent: codefly.dev/go:0.0.54
+  agent: codefly.dev/go:0.0.56
