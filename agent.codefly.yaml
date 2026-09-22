@@ -2,3 +2,8 @@ publisher: codefly.dev
 kind: codefly:toolbox
 name: grpc
 version: 0.0.13
+release:
+  owner: cli
+source:
+  directory: cmd/toolbox-grpc
+  agent: codefly.dev/go:0.0.54
