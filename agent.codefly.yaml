@@ -1,7 +1,7 @@
 publisher: codefly.dev
 kind: codefly:toolbox
 name: grpc
-version: 0.0.14
+version: 0.0.15
 release:
   owner: cli
 source:
